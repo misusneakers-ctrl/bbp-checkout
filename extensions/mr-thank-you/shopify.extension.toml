@@ -10,5 +10,5 @@ module = "./src/ThankYou.jsx"
 target = "purchase.thank-you.block.render"
 
 [extensions.capabilities]
-network_access = false
+network_access = true
 api_access = false
