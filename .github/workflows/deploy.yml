@@ -1,0 +1,24 @@
+# Déploie l'extension sur Shopify à chaque dépôt de fichiers sur la branche main.
+# Secret GitHub requis : SHOPIFY_APP_AUTOMATION_TOKEN (Dev Dashboard → bbp-checkout → Settings → App Automation Token).
+name: Déployer sur Shopify
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Dépendances
+        run: npm install
+      - name: Shopify CLI
+        run: npm install -g @shopify/cli@latest
+      - name: Déploiement
+        env:
+          SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: shopify app deploy --config production --allow-updates --source-control-url "$COMMIT_URL"
