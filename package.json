@@ -1,0 +1,7 @@
+{
+  "name": "bbp-checkout",
+  "private": true,
+  "description": "BBP — extensions de paiement Shopify (point relais Mondial Relay sur la page de remerciement)",
+  "workspaces": ["extensions/*"],
+  "scripts": { "deploy": "shopify app deploy" }
+}

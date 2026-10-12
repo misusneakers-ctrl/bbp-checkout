@@ -1,0 +1,19 @@
+# Appli Shopify « bbp-checkout » (Dev Dashboard, org « Bons baisers de Paname FR »).
+# Elle ne sert qu'à porter l'extension de la page de remerciement : aucun accès aux données de la boutique.
+client_id = "9ab9ed77b03700812b303db54f5a8965"
+name = "bbp-checkout"
+application_url = "https://bbp-webhook.vercel.app"
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = false
+include_config_on_deploy = true
+
+[access_scopes]
+scopes = ""
+
+[auth]
+redirect_urls = [ "https://bbp-webhook.vercel.app/api/auth/callback" ]
+
+[webhooks]
+api_version = "2026-07"
