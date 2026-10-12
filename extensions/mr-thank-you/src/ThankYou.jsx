@@ -32,21 +32,32 @@ function Extension() {
 
   if (!isMondialRelay(groups)) return null;
 
+  const orderId = conf && conf.order && conf.order.id ? String(conf.order.id).split('/').pop() : '';
+  const number = conf && conf.number ? conf.number : '';
+  const url = orderId && number ? `${PAGE}?o=${encodeURIComponent(orderId)}&c=${encodeURIComponent(number)}` : '';
+
+  // Point déjà choisi dans le panier : on le rappelle, avec un bouton pour le changer
+  // (changement accepté par bbp-webhook pendant l'heure qui suit la commande).
   const id = attr(attrs, 'mondial_relay_id');
   if (id) {
     return (
       <s-banner tone="success" heading="Votre point relais Mondial Relay">
-        <s-text>
-          {attr(attrs, 'mondial_relay_name')} — {attr(attrs, 'mondial_relay_address')},{' '}
-          {attr(attrs, 'mondial_relay_zip')} {attr(attrs, 'mondial_relay_city')}
-        </s-text>
+        <s-stack gap="base">
+          <s-text>
+            {attr(attrs, 'mondial_relay_name')} — {attr(attrs, 'mondial_relay_address')},{' '}
+            {attr(attrs, 'mondial_relay_zip')} {attr(attrs, 'mondial_relay_city')}
+          </s-text>
+          {url ? (
+            <s-button variant="secondary" href={url} target="_blank">
+              Changer de point relais
+            </s-button>
+          ) : null}
+        </s-stack>
       </s-banner>
     );
   }
 
-  const orderId = conf && conf.order && conf.order.id ? String(conf.order.id).split('/').pop() : '';
-  const number = conf && conf.number ? conf.number : '';
-  if (!orderId || !number) {
+  if (!url) {
     return (
       <s-banner tone="warning" heading="Choisissez votre point relais Mondial Relay">
         <s-text>Vous allez recevoir dans quelques minutes un e-mail pour choisir votre point relais.</s-text>
@@ -54,7 +65,6 @@ function Extension() {
     );
   }
 
-  const url = `${PAGE}?o=${encodeURIComponent(orderId)}&c=${encodeURIComponent(number)}`;
   return (
     <s-banner tone="warning" heading="Choisissez votre point relais Mondial Relay">
       <s-stack gap="base">
