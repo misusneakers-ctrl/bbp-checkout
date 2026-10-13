@@ -1,16 +1,23 @@
-// Page de remerciement — choix du point relais Mondial Relay DIRECTEMENT dans la page
-// (remplace l'appli Mondial Relay). Affiché uniquement si la livraison choisie est Mondial Relay.
-//  - point déjà choisi (panier) → rappel du point + « Changer » (pendant l'heure qui suit la commande) ;
-//  - sinon → liste des points proches du code postal de livraison, choix, validation.
+// Page de remerciement — choix du point relais Mondial Relay dans une FENÊTRE (pop-in), comme dans
+// le panier : recherche par code postal, carte avec les points numérotés, liste avec horaires.
+// Affiché uniquement si la livraison choisie est Mondial Relay.
+//  - point déjà choisi (panier) → rappel du point + « Changer de point relais » (dans l'heure qui suit) ;
+//  - sinon → bandeau « Choisissez votre point relais » + bouton qui ouvre la fenêtre.
 // Données et enregistrement : bbp-webhook (/api/mondial-relay/points et /order-point).
 // Preuve : numéro de confirmation de la commande, que seule l'acheteuse voit.
+// Carte : composant Shopify (Google Maps). Clé « Carte point relais - page de remerciement Shopify »
+// du projet Google « Bons baisers de Paname », limitée à l'API Maps JavaScript et aux domaines
+// bonsbaisers.paris / Shopify : elle est visible dans la page par nature, mais inutilisable ailleurs.
 import '@shopify/ui-extensions/preact';
 import { render } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 
 const API = 'https://bbp-webhook.vercel.app/api/mondial-relay';
 const PAGE = 'https://www.bonsbaisers.paris/pages/point-relais';
+const MAPS_KEY = 'AIzaSyAzslLku1q9jdWP4M7bSQzypW1f_Di8SvU';
+const MODAL_ID = 'bbp-mr-fenetre';
 const JOURS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const SEMAINE = [['monday', 'Lun'], ['tuesday', 'Mar'], ['wednesday', 'Mer'], ['thursday', 'Jeu'], ['friday', 'Ven'], ['saturday', 'Sam'], ['sunday', 'Dim']];
 
 export default function extension() {
   render(<Extension />, document.body);
@@ -33,10 +40,32 @@ function adresse(p) {
   return `${p.address}, ${p.zip} ${p.city}`;
 }
 
+function horaire(h) {
+  if (!h) return '—';
+  return h === 'Closed' ? 'Fermé' : h;
+}
+
 function horairesDuJour(p) {
   const h = p.hours && p.hours[JOURS[new Date().getDay()]];
   if (!h) return '';
   return h === 'Closed' ? "Fermé aujourd'hui" : `Aujourd'hui : ${h}`;
+}
+
+// Centre et zoom pour voir tous les points (la carte Shopify n'a pas de « fitBounds »).
+function cadrage(points) {
+  const pts = (points || []).filter((p) => typeof p.lat === 'number' && typeof p.lng === 'number');
+  if (!pts.length) return null;
+  const lats = pts.map((p) => p.lat);
+  const lngs = pts.map((p) => p.lng);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+  const spanLng = Math.max(maxLng - minLng, 0.002);
+  const spanLat = Math.max(maxLat - minLat, 0.002);
+  // ~560 × 300 px utiles, tuiles de 256 px, marge de 30 %.
+  const zLng = Math.log2((560 / 256) * 360 / (spanLng * 1.3));
+  const zLat = Math.log2((300 / 256) * 170 / (spanLat * 1.3));
+  const zoom = Math.max(5, Math.min(16, Math.floor(Math.min(zLng, zLat))));
+  return { latitude: (minLat + maxLat) / 2, longitude: (minLng + maxLng) / 2, zoom };
 }
 
 function Extension() {
@@ -60,22 +89,29 @@ function Extension() {
       }
     : null;
 
+  const modal = useRef(null);
   const [state, setState] = useState(null); // réponse de /order-point
-  const [phase, setPhase] = useState('chargement'); // chargement | vu | choix | enregistrement | erreur
+  const [phase, setPhase] = useState('chargement'); // chargement | vu | choix | erreur
   const [zip, setZip] = useState('');
   const [points, setPoints] = useState(null);
   const [recherche, setRecherche] = useState(false);
+  const [enregistrement, setEnregistrement] = useState(false);
   const [choisi, setChoisi] = useState('');
   const [message, setMessage] = useState('');
+  const [vue, setVue] = useState(null); // centre/zoom de la carte
 
-  async function chercher(cp) {
+  async function chercher(cp, idActuel) {
     if (!/^\d{5}$/.test(cp || '')) { setMessage('Indiquez un code postal à 5 chiffres.'); return; }
     setRecherche(true); setMessage('');
     try {
-      const r = await fetch(`${API}/points?zip=${cp}&n=8`);
+      const r = await fetch(`${API}/points?zip=${cp}&n=10`);
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
-      setPoints(d.points); setChoisi(d.points[0] ? d.points[0].id : '');
+      setPoints(d.points);
+      setVue(cadrage(d.points));
+      const garde = idActuel || choisi || (state && state.point && state.point.id);
+      const actuel = garde && d.points.find((p) => p.id === garde);
+      setChoisi(actuel ? actuel.id : (d.points[0] ? d.points[0].id : ''));
       if (!d.points.length) setMessage('Aucun point relais trouvé autour de ce code postal.');
     } catch (e) {
       setMessage((e && e.message) || 'Recherche indisponible, réessayez.');
@@ -96,8 +132,10 @@ function Extension() {
         if (!d.ok) { setPhase('erreur'); setMessage(d.error || ''); return; }
         setState(d);
         setZip(d.zip || '');
+        // Les points sont chargés d'avance : la fenêtre s'ouvre déjà remplie.
+        if (d.canChoose || d.canChange) chercher((d.point && d.point.zip) || d.zip, d.point && d.point.id);
         if (d.hasPoint) { setPhase('vu'); return; }
-        if (d.canChoose) { setPhase('choix'); chercher(d.zip); return; }
+        if (d.canChoose) { setPhase('choix'); return; }
         setPhase('vu');
       } catch (e) {
         if (!stop && essais < 15) { essais++; setTimeout(charger, 2000); return; }
@@ -110,8 +148,8 @@ function Extension() {
 
   async function valider() {
     const p = (points || []).find((x) => x.id === choisi);
-    if (!p) return;
-    setPhase('enregistrement'); setMessage('');
+    if (!p) { setMessage('Choisissez un point relais dans la liste.'); return; }
+    setEnregistrement(true); setMessage('');
     try {
       const r = await fetch(`${API}/order-point`, {
         method: 'POST',
@@ -119,30 +157,120 @@ function Extension() {
         body: JSON.stringify({ o: orderId, c: number, point: p }),
       });
       const d = await r.json();
-      if (!d.ok) { setMessage(d.error || 'Erreur, réessayez.'); setPhase('choix'); return; }
+      setEnregistrement(false);
+      if (!d.ok) { setMessage(d.error || 'Erreur, réessayez.'); return; }
       setState(d); setPhase('vu');
+      if (modal.current && modal.current.hideOverlay) modal.current.hideOverlay();
     } catch (e) {
-      setMessage('Erreur de connexion, réessayez dans un instant.'); setPhase('choix');
+      setEnregistrement(false);
+      setMessage('Erreur de connexion, réessayez dans un instant.');
     }
   }
 
   if (!mr) return null;
 
   const point = (state && state.point) || cartPoint;
+  const selection = (points || []).find((p) => p.id === choisi);
+
+  // --- La fenêtre (pop-in) ---
+  const fenetre = (
+    <s-modal id={MODAL_ID} ref={modal} heading="Choisissez votre point relais Mondial Relay" size="large">
+      <s-stack gap="base">
+        <s-stack direction="inline" gap="base" alignItems="end">
+          <s-text-field
+            label="Code postal"
+            value={zip}
+            maxLength={5}
+            onInput={(e) => {
+              const v = String(e.currentTarget.value || '').replace(/\D/g, '').slice(0, 5);
+              setZip(v);
+              if (v.length === 5) chercher(v);
+            }}
+          />
+          <s-button variant="secondary" loading={recherche} onClick={() => chercher(zip)}>Rechercher</s-button>
+        </s-stack>
+        {message ? <s-text tone="critical">{message}</s-text> : null}
+
+        {vue && points && points.length ? (
+          <s-map
+            apiKey={MAPS_KEY}
+            accessibilityLabel="Carte des points relais Mondial Relay"
+            latitude={vue.latitude}
+            longitude={vue.longitude}
+            zoom={vue.zoom}
+            blockSize="280px"
+          >
+            {points.map((p, i) => (typeof p.lat === 'number' && typeof p.lng === 'number' ? (
+              <s-map-marker
+                key={p.id}
+                latitude={p.lat}
+                longitude={p.lng}
+                accessibilityLabel={`${i + 1}. ${p.name}`}
+                commandFor={`bbp-mr-pop-${i}`}
+                onClick={() => setChoisi(p.id)}
+              />
+            ) : null))}
+            {points.map((p, i) => (
+              <s-popover key={`pop-${p.id}`} id={`bbp-mr-pop-${i}`}>
+                <s-box padding="small-100">
+                  <s-text type="strong">{i + 1}. {p.name}</s-text>
+                </s-box>
+              </s-popover>
+            ))}
+          </s-map>
+        ) : null}
+
+        {recherche && !points ? (
+          <s-stack direction="inline" gap="base"><s-spinner /><s-text>Recherche des points relais…</s-text></s-stack>
+        ) : null}
+
+        {points && points.length ? (
+          <s-scroll-box maxBlockSize="320px">
+            <s-choice-list name="point-relais" onChange={(e) => setChoisi((e.currentTarget.values || [])[0] || '')}>
+              {points.map((p, i) => (
+                <s-choice key={p.id} value={p.id} selected={p.id === choisi}>
+                  {i + 1}. {p.name}{p.locker ? ' · Locker 24/7' : ''}
+                  <s-text slot="details">{adresse(p)}{horairesDuJour(p) ? ` — ${horairesDuJour(p)}` : ''}</s-text>
+                </s-choice>
+              ))}
+            </s-choice-list>
+          </s-scroll-box>
+        ) : null}
+
+        {selection && selection.hours ? (
+          <s-stack gap="small-200">
+            <s-text type="strong">Horaires — {selection.name}</s-text>
+            <s-text>
+              {SEMAINE.map(([k, l]) => `${l} ${horaire(selection.hours[k])}`).join(' · ')}
+            </s-text>
+          </s-stack>
+        ) : null}
+      </s-stack>
+      <s-button slot="primary-action" variant="primary" loading={enregistrement} disabled={!selection} onClick={valider}>
+        Valider ce point relais
+      </s-button>
+      <s-button slot="secondary-actions" variant="secondary" command="--hide" commandFor={MODAL_ID}>
+        Fermer
+      </s-button>
+    </s-modal>
+  );
 
   // Point enregistré.
   if ((phase === 'vu' || (phase === 'chargement' && cartPoint)) && point) {
     return (
+      <>
       <s-banner tone="success" heading="Votre point relais Mondial Relay">
         <s-stack gap="base">
           <s-text><s-text type="strong">{point.name}</s-text> — {adresse(point)}</s-text>
           {state && state.canChange ? (
-            <s-button variant="secondary" onClick={() => { setPhase('choix'); chercher(zip || point.zip); }}>
+            <s-button variant="secondary" command="--show" commandFor={MODAL_ID}>
               Changer de point relais
             </s-button>
           ) : null}
         </s-stack>
       </s-banner>
+      {state && state.canChange ? fenetre : null}
+      </>
     );
   }
 
@@ -177,40 +305,18 @@ function Extension() {
     );
   }
 
-  // Choix.
+  // Aucun point encore : bandeau + bouton qui ouvre la fenêtre.
   return (
-    <s-banner tone="warning" heading={state && state.hasPoint ? 'Changer de point relais' : 'Choisissez votre point relais Mondial Relay'}>
+    <>
+    <s-banner tone="warning" heading="Choisissez votre point relais Mondial Relay">
       <s-stack gap="base">
-        {!(state && state.hasPoint) ? (
-          <s-text>Pour que nous puissions expédier votre commande, choisissez le point relais où la retirer.</s-text>
-        ) : null}
-        <s-stack direction="inline" gap="base" alignItems="end">
-          <s-text-field
-            label="Code postal"
-            value={zip}
-            maxLength={5}
-            onInput={(e) => setZip(String(e.currentTarget.value || '').replace(/\D/g, '').slice(0, 5))}
-          />
-          <s-button variant="secondary" loading={recherche} onClick={() => chercher(zip)}>Rechercher</s-button>
-        </s-stack>
-        {message ? <s-text tone="critical">{message}</s-text> : null}
-        {points && points.length ? (
-          <s-choice-list name="point-relais" onChange={(e) => setChoisi((e.currentTarget.values || [])[0] || '')}>
-            {points.map((p) => (
-              <s-choice value={p.id} selected={p.id === choisi}>
-                {p.name}{p.locker ? ' · Locker 24/7' : ''}
-                <s-text slot="details">{adresse(p)}{horairesDuJour(p) ? ` — ${horairesDuJour(p)}` : ''}</s-text>
-              </s-choice>
-            ))}
-          </s-choice-list>
-        ) : null}
-        {points && points.length ? (
-          <s-button variant="primary" loading={phase === 'enregistrement'} onClick={valider}>
-            Valider ce point relais
-          </s-button>
-        ) : null}
-        <s-link href={`${PAGE}?${proof}`} target="_blank">Voir les points sur une carte</s-link>
+        <s-text>Pour que nous puissions expédier votre commande, choisissez le point relais où la retirer.</s-text>
+        <s-button variant="primary" command="--show" commandFor={MODAL_ID}>
+          Choisir mon point relais
+        </s-button>
       </s-stack>
     </s-banner>
+    {fenetre}
+    </>
   );
 }
