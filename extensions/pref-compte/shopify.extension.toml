@@ -1,0 +1,14 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Préférences — 5 € offerts (espace client)"
+handle = "pref-compte"
+type = "ui_extension"
+
+[[extensions.targeting]]
+module = "./src/Profil.jsx"
+target = "customer-account.profile.block.render"
+
+[extensions.capabilities]
+network_access = false
+api_access = false
